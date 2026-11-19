@@ -1,0 +1,14 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugins": [
+    {
+      "package": "C:/path/to/opencode-local-llama",
+      "options": {
+        "port": 5514,
+        "modelsPath": "F:/models",
+        "binPath": "F:/llama.cpp/build/bin"
+      }
+    }
+  ],
+  "model": "local-llama/My-Model"
+}

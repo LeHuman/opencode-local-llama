@@ -1,0 +1,23 @@
+{
+  "name": "opencode-local-llama",
+  "version": "0.1.0",
+  "description": "OpenCode plugin that boots a local llama.cpp server on demand, registers discovered models, supervises it, and tears it down on exit.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "files": [
+    "src",
+    "kit"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "llama.cpp",
+    "local-llm"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "@opencode/plugin": "*"
+  }
+}
