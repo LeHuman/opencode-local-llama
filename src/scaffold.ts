@@ -90,8 +90,18 @@ export function readConfiguredModels(kitPath: string): Array<{ id: string }> {
     const modelsConfig = JSON.parse(readFileSync(path.join(modelsDir, "models.json"), "utf8")) as {
       models?: Record<string, { alias?: string } | undefined>
     }
+    // Only advertise entries whose weights exist: a leftover entry for a
+    // deleted GGUF would register an id that can never load.
+    const stems = new Set(
+      existsSync(modelsDir)
+        ? readdirSync(modelsDir)
+            .filter((file) => file.toLowerCase().endsWith(".gguf"))
+            .map((file) => path.parse(file).name.toLowerCase())
+        : [],
+    )
     const ids: Array<{ id: string }> = []
     for (const [stem, entry] of Object.entries(modelsConfig.models ?? {})) {
+      if (!stems.has(stem.toLowerCase())) continue
       const id = entry?.alias ?? stem
       if (id) ids.push({ id })
     }
