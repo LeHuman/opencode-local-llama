@@ -1,5 +1,14 @@
 import { spawn, execFileSync, type ChildProcess } from "node:child_process"
-import { appendFileSync, closeSync, existsSync, openSync, readdirSync, readFileSync } from "node:fs"
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  unlinkSync,
+} from "node:fs"
 import path from "node:path"
 import type { LocalLlamaConfig } from "./config"
 
@@ -182,35 +191,54 @@ function isPidAlive(pid: number): boolean {
  * `parentPid` to disappear, then runs serve-down.ps1.
  *
  * Every plugin activation used to spawn another watchdog, leaving dozens of
- * orphans per host. The watchdog now records its pid, and a live watchdog
- * already watching the same parent makes this a no-op.
+ * orphans per host. One live watchdog is enough for the whole kit: it is only
+ * alive while its watched host is alive, so no replacement is ever needed.
+ * A claim file closes the window where two activations spawn at once.
  */
 export function spawnWatchdog(cfg: LocalLlamaConfig, parentPid: number): void {
   const pidFile = watchdogPidFile(cfg)
   try {
-    const [pidText, parentText] = readFileSync(pidFile, "utf8").trim().split(/\s+/)
-    const pid = Number(pidText)
+    const pid = Number(readFileSync(pidFile, "utf8").trim().split(/\s+/)[0])
     if (pid && isPidAlive(pid)) {
-      if (Number(parentText) === parentPid) {
-        debug(`watchdog already armed for parent ${parentPid} (pid ${pid})`)
-        return
-      }
-      // Stale guard for a previous host process: replace it.
-      try {
-        process.kill(pid)
-      } catch {
-        // already gone
-      }
+      debug(`watchdog already armed (pid ${pid})`)
+      return
     }
   } catch {
     // no pid file yet
   }
 
+  const lockFile = `${pidFile}.lock`
+  const takeLock = (): boolean => {
+    try {
+      closeSync(openSync(lockFile, "wx"))
+      return true
+    } catch {
+      return false
+    }
+  }
+  if (!takeLock()) {
+    // Another activation is arming one right now; its lock file is removed by
+    // the watchdog itself once it has written the pid file.
+    try {
+      if (Date.now() - statSync(lockFile).mtimeMs < 30_000) {
+        debug("watchdog spawn already in flight")
+        return
+      }
+      unlinkSync(lockFile)
+    } catch {
+      return
+    }
+    if (!takeLock()) return
+  }
+
   const pidFilePs = pidFile.replace(/'/g, "''")
+  const lockFilePs = lockFile.replace(/'/g, "''")
   const inner = [
     `$parent = ${parentPid}`,
     `$file = '${pidFilePs}'`,
+    `$lock = '${lockFilePs}'`,
     `Set-Content -Path $file -Value "$PID $parent"`,
+    "Remove-Item -Path $lock -ErrorAction SilentlyContinue",
     "while (Get-Process -Id $parent -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 2 }",
     "Remove-Item -Path $file -ErrorAction SilentlyContinue",
     `& '${kitScript(cfg, "serve-down.ps1").replace(/'/g, "''")}'`,
@@ -232,6 +260,12 @@ export function spawnWatchdog(cfg: LocalLlamaConfig, parentPid: number): void {
     child.unref()
   } catch (error) {
     debug(`watchdog threw: ${(error as Error).message}`)
+    // Release the claim so the next activation can retry.
+    try {
+      unlinkSync(lockFile)
+    } catch {
+      // already gone
+    }
   }
 }
 

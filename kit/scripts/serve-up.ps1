@@ -183,36 +183,56 @@ if ([int]$SLEEP_IDLE_SECONDS -gt 0) { $argList += " --sleep-idle-seconds $SLEEP_
 
 $outLog = Join-Path $LOG_DIR "server.out.log"
 $errLog = Join-Path $LOG_DIR "server.err.log"
-# Refuse to race another serve-up: two spawns would fight over the port and the
-# loser would clobber the PID file.
-$live = @(Get-Process -Name "llama-server" -ErrorAction SilentlyContinue |
-    Where-Object { $_.Path -and $_.Path.StartsWith($server.DirectoryName, [StringComparison]::OrdinalIgnoreCase) })
-if ($live.Count -gt 0) {
-    throw ("llama-server is already running (pid {0}) from this kit. Run serve-down.ps1 first." -f ($live.Id -join ", "))
-}
 
-$proc = Start-Process -FilePath $server.FullName -ArgumentList $argList `
-    -WorkingDirectory $server.DirectoryName -WindowStyle Hidden -PassThru `
-    -RedirectStandardOutput $outLog -RedirectStandardError $errLog
-
-$deadline = (Get-Date).AddSeconds(180)
-$ready = $false
-while ((Get-Date) -lt $deadline) {
-    Start-Sleep -Seconds 1
-    if ($proc.HasExited) {
-        Write-Host "llama-server exited early (code $($proc.ExitCode)). Last log lines:" -ForegroundColor Red
-        Get-Content $errLog -Tail 25 -ErrorAction SilentlyContinue
-        throw "Server failed to start. 'unknown model architecture' => run fetch.ps1 to update llama.cpp. 'out of memory' => lower context in models.json for this model."
+# Atomic start lock: two serve-ups launched together both pass the live-process
+# check before either spawns, so the check alone cannot prevent a port fight.
+$startLock = Join-Path $LOG_DIR "serve-up.starting"
+try {
+    New-Item -ItemType Directory -Path $startLock -ErrorAction Stop | Out-Null
+} catch {
+    $age = 0
+    if (Test-Path $startLock) { $age = ((Get-Date) - (Get-Item $startLock).LastWriteTime).TotalSeconds }
+    if ($age -lt 200) {
+        throw ("Another serve-up.ps1 is starting the server (lock age {0}s)." -f [int]$age)
     }
-    if (Test-ServerHealthy) { $ready = $true; break }
+    Remove-Item $startLock -Recurse -Force -ErrorAction SilentlyContinue
+    New-Item -ItemType Directory -Path $startLock -ErrorAction Stop | Out-Null
 }
-if (-not $ready) {
-    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-    throw "Server did not become healthy within 180s; process stopped. See $errLog"
+
+try {
+    # Refuse to race another serve-up: two spawns would fight over the port and
+    # the loser would clobber the PID file.
+    $live = @(Get-Process -Name "llama-server" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and $_.Path.StartsWith($server.DirectoryName, [StringComparison]::OrdinalIgnoreCase) })
+    if ($live.Count -gt 0) {
+        throw ("llama-server is already running (pid {0}) from this kit. Run serve-down.ps1 first." -f ($live.Id -join ", "))
+    }
+
+    $proc = Start-Process -FilePath $server.FullName -ArgumentList $argList `
+        -WorkingDirectory $server.DirectoryName -WindowStyle Hidden -PassThru `
+        -RedirectStandardOutput $outLog -RedirectStandardError $errLog
+
+    $deadline = (Get-Date).AddSeconds(180)
+    $ready = $false
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Seconds 1
+        if ($proc.HasExited) {
+            Write-Host "llama-server exited early (code $($proc.ExitCode)). Last log lines:" -ForegroundColor Red
+            Get-Content $errLog -Tail 25 -ErrorAction SilentlyContinue
+            throw "Server failed to start. 'unknown model architecture' => run fetch.ps1 to update llama.cpp. 'out of memory' => lower context in models.json for this model."
+        }
+        if (Test-ServerHealthy) { $ready = $true; break }
+    }
+    if (-not $ready) {
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        throw "Server did not become healthy within 180s; process stopped. See $errLog"
+    }
+    # Only record the PID once the server is actually serving, so a failed spawn
+    # cannot overwrite a healthy instance's PID.
+    $proc.Id | Set-Content -Path $PID_FILE
+} finally {
+    Remove-Item $startLock -Recurse -Force -ErrorAction SilentlyContinue
 }
-# Only record the PID once the server is actually serving, so a failed spawn
-# cannot overwrite a healthy instance's PID.
-$proc.Id | Set-Content -Path $PID_FILE
 
 Start-Sleep -Seconds 1
 $freeAfter = Get-FreeVramGb
