@@ -157,15 +157,58 @@ export function stopServer(cfg: LocalLlamaConfig): void {
   }
 }
 
+/** Pid file recording "<watchdog pid> <watched parent pid>". */
+function watchdogPidFile(cfg: LocalLlamaConfig): string {
+  return path.join(cfg.kitPath!, "logs", "watchdog.pid")
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    // EPERM means the process exists but belongs to someone else.
+    return (error as NodeJS.ErrnoException).code === "EPERM"
+  }
+}
+
 /**
  * Guard against OpenCode exiting without running plugin cleanup (hard exit,
  * crash, or a CLI that does not await dispose). A detached PowerShell waits for
  * `parentPid` to disappear, then runs serve-down.ps1.
+ *
+ * Every plugin activation used to spawn another watchdog, leaving dozens of
+ * orphans per host. The watchdog now records its pid, and a live watchdog
+ * already watching the same parent makes this a no-op.
  */
 export function spawnWatchdog(cfg: LocalLlamaConfig, parentPid: number): void {
+  const pidFile = watchdogPidFile(cfg)
+  try {
+    const [pidText, parentText] = readFileSync(pidFile, "utf8").trim().split(/\s+/)
+    const pid = Number(pidText)
+    if (pid && isPidAlive(pid)) {
+      if (Number(parentText) === parentPid) {
+        debug(`watchdog already armed for parent ${parentPid} (pid ${pid})`)
+        return
+      }
+      // Stale guard for a previous host process: replace it.
+      try {
+        process.kill(pid)
+      } catch {
+        // already gone
+      }
+    }
+  } catch {
+    // no pid file yet
+  }
+
+  const pidFilePs = pidFile.replace(/'/g, "''")
   const inner = [
     `$parent = ${parentPid}`,
+    `$file = '${pidFilePs}'`,
+    `Set-Content -Path $file -Value "$PID $parent"`,
     "while (Get-Process -Id $parent -ErrorAction SilentlyContinue) { Start-Sleep -Seconds 2 }",
+    "Remove-Item -Path $file -ErrorAction SilentlyContinue",
     `& '${kitScript(cfg, "serve-down.ps1").replace(/'/g, "''")}'`,
   ].join("\n")
   const innerEncoded = Buffer.from(inner, "utf16le").toString("base64")
