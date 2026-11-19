@@ -20,7 +20,7 @@ Keeps local inference private and free of per-token cost: weights stay in a fold
 
 ## Features
 
-- Scaffolds the bundled kit into `%LOCALAPPDATA%\opencode-local-llama\kit` on first run; existing files are never overwritten, so upgrades add scripts without clobbering edits.
+- Scaffolds the bundled kit into `%LOCALAPPDATA%\opencode-local-llama\kit` on first run and **refreshes the framework scripts on every start**; user files (`config.json`, models, binaries, logs) are never overwritten.
 - Starts `llama-server` when OpenCode starts and adopts an already-running server instead of starting a second one.
 - Registers models from `GET /v1/models` (router mode lists every GGUF in the models folder); ids and context windows come from the server, not from plugin config.
 - Seeds ids from `models.json` at activation so a cold start can resolve `-m local-llama/<id>` before discovery completes.

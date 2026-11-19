@@ -20,17 +20,21 @@ export interface ResolvedKit {
   created: boolean
 }
 
-function copyMissing(src: string, dest: string): number {
+/**
+ * Copy the framework into the kit, overwriting files that came from the package.
+ * User-owned files live outside kit/ (config.json at the kit root, models and
+ * build directories), so they are never touched by an upgrade.
+ */
+function copyFramework(src: string, dest: string): number {
   let copied = 0
   mkdirSync(dest, { recursive: true })
   for (const entry of readdirSync(src)) {
     const from = path.join(src, entry)
     const to = path.join(dest, entry)
     if (statSync(from).isDirectory()) {
-      copied += copyMissing(from, to)
+      copied += copyFramework(from, to)
       continue
     }
-    if (existsSync(to)) continue // never overwrite user edits
     copyFileSync(from, to)
     copied++
   }
@@ -118,7 +122,7 @@ export function resolveKit(cfg: LocalLlamaConfig): ResolvedKit {
   const dataDir = cfg.dataDir ?? path.join(process.env.LOCALAPPDATA ?? process.cwd(), "opencode-local-llama")
   const kitPath = path.join(dataDir, "kit")
   const before = existsSync(path.join(kitPath, "scripts", "serve-up.ps1"))
-  const copied = copyMissing(FRAMEWORK_DIR, kitPath)
+  const copied = copyFramework(FRAMEWORK_DIR, kitPath)
   writeKitConfig(kitPath, cfg)
 
   return { kitPath, created: !before || copied > 0 }
