@@ -51,7 +51,8 @@ function writeKitConfig(kitPath: string, cfg: LocalLlamaConfig): void {
   let current: Record<string, unknown> = {}
   if (existsSync(file)) {
     try {
-      current = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
+      // Strip a UTF-8 BOM: JSON.parse rejects it, while editors on Windows add it.
+      current = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>
     } catch {
       return // leave a hand-edited, unparseable config alone
     }
@@ -79,7 +80,9 @@ function writeKitConfig(kitPath: string, cfg: LocalLlamaConfig): void {
  */
 export function readConfiguredModels(kitPath: string): Array<{ id: string }> {
   try {
-    const kitConfig = JSON.parse(readFileSync(path.join(kitPath, "config.json"), "utf8")) as {
+    const kitConfig = JSON.parse(
+      readFileSync(path.join(kitPath, "config.json"), "utf8").replace(/^\uFEFF/, ""),
+    ) as {
       modelsDir?: string
     }
     const modelsDir = kitConfig.modelsDir
@@ -87,7 +90,9 @@ export function readConfiguredModels(kitPath: string): Array<{ id: string }> {
         ? kitConfig.modelsDir
         : path.join(kitPath, kitConfig.modelsDir)
       : path.join(kitPath, "models")
-    const modelsConfig = JSON.parse(readFileSync(path.join(modelsDir, "models.json"), "utf8")) as {
+    const modelsConfig = JSON.parse(
+      readFileSync(path.join(modelsDir, "models.json"), "utf8").replace(/^\uFEFF/, ""),
+    ) as {
       models?: Record<string, { alias?: string } | undefined>
     }
     // Only advertise entries whose weights exist: a leftover entry for a

@@ -84,7 +84,9 @@ export function readServeUpLog(cfg: LocalLlamaConfig, lines = 15): string {
 /** Resolve the models folder the kit will use (kit config.json, kit-relative). */
 export function resolveModelsDir(cfg: LocalLlamaConfig): string {
   try {
-    const kitConfig = JSON.parse(readFileSync(path.join(cfg.kitPath!, "config.json"), "utf8")) as {
+    const kitConfig = JSON.parse(
+      readFileSync(path.join(cfg.kitPath!, "config.json"), "utf8").replace(/^\uFEFF/, ""),
+    ) as {
       modelsDir?: string
     }
     if (!kitConfig.modelsDir) return path.join(cfg.kitPath!, "models")
@@ -117,7 +119,9 @@ function findServerExe(dir: string): string | null {
 export function preflight(cfg: LocalLlamaConfig): string | null {
   let toolsDir = cfg.binPath ?? path.join(cfg.kitPath!, "build", "tools")
   try {
-    const kitConfig = JSON.parse(readFileSync(path.join(cfg.kitPath!, "config.json"), "utf8")) as {
+    const kitConfig = JSON.parse(
+      readFileSync(path.join(cfg.kitPath!, "config.json"), "utf8").replace(/^\uFEFF/, ""),
+    ) as {
       toolsDir?: string
     }
     if (!cfg.binPath && kitConfig.toolsDir) {
