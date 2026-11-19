@@ -32,9 +32,12 @@ if (-not (Get-Command curl.exe -ErrorAction SilentlyContinue)) {
     throw "curl.exe not found - Windows 10 1803+ ships it in System32; check PATH."
 }
 
-$drive = Get-PSDrive ($MODELS_DIR.Substring(0, 1))
-$freeDiskGb = [math]::Round($drive.Free / 1GB, 1)
-Write-Host ("Disk: {0} GB free on {1}: (models folder)" -f $freeDiskGb, $drive.Name)
+$driveRoot = if ($MODELS_DIR -match '^[A-Za-z]:') { $MODELS_DIR.Substring(0, 2) } else { $null }
+if ($driveRoot) {
+    $drive = Get-PSDrive $driveRoot.TrimEnd(':')
+    $freeDiskGb = [math]::Round($drive.Free / 1GB, 1)
+    Write-Host ("Disk: {0} GB free on {1} (models folder)" -f $freeDiskGb, $driveRoot)
+}
 
 # Optional: opencode status (informational, never fails the fetch)
 if (Get-Command opencode -ErrorAction SilentlyContinue) {
@@ -68,6 +71,8 @@ function Get-InstalledBuild($server) {
 }
 
 $headers = @{ "User-Agent" = "local-llm" }
+# Windows PowerShell defaults below TLS 1.2 on older builds; GitHub rejects that.
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $releases = Invoke-RestMethod -Uri "https://api.github.com/repos/ggml-org/llama.cpp/releases?per_page=15" -Headers $headers -TimeoutSec 60
 
 # releases/latest can be a pointer-only v1.0.0 release (nightly-tag.txt only),
@@ -115,7 +120,7 @@ if ($installed -and $installedBuild -ge $latestBuild -and -not $Update) {
 
     # A running server holds ggml-cuda.dll / llama.dll, which blocks extraction.
     $running = @(Get-Process -Name "llama-server" -ErrorAction SilentlyContinue |
-        Where-Object { $_.Path -like "$TOOLS_DIR*" })
+        Where-Object { $_.Path -and $_.Path.StartsWith($TOOLS_DIR, [StringComparison]::OrdinalIgnoreCase) })
     if ($running.Count -gt 0) {
         Write-Host ("Stopping {0} llama-server process(es) to replace binaries..." -f $running.Count) -ForegroundColor Yellow
         $running | Stop-Process -Force -ErrorAction SilentlyContinue

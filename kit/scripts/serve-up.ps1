@@ -38,7 +38,10 @@ function Resolve-Gguf {
 # config key -> llama.cpp INI/CLI args
 function New-IniBody($settings) {
     $lines = @()
-    if ($settings.ContainsKey("alias"))       { $lines += "alias = $($settings['alias'])" }
+    # INI values are line-based: strip control characters so a models.json value
+    # cannot inject extra keys.
+    $clean = { param($v) ([string]$v) -replace "[\r\n\t]", " " }
+    if ($settings.ContainsKey("alias"))       { $lines += "alias = $(& $clean $settings['alias'])" }
     if ($settings.ContainsKey("context"))     { $lines += "c = $($settings['context'])" }
     if ($settings.ContainsKey("gpuLayers"))   { $lines += "n-gpu-layers = $($settings['gpuLayers'])" }
     if ($settings.ContainsKey("kvQuant"))     {
@@ -180,10 +183,17 @@ if ([int]$SLEEP_IDLE_SECONDS -gt 0) { $argList += " --sleep-idle-seconds $SLEEP_
 
 $outLog = Join-Path $LOG_DIR "server.out.log"
 $errLog = Join-Path $LOG_DIR "server.err.log"
+# Refuse to race another serve-up: two spawns would fight over the port and the
+# loser would clobber the PID file.
+$live = @(Get-Process -Name "llama-server" -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -and $_.Path.StartsWith($server.DirectoryName, [StringComparison]::OrdinalIgnoreCase) })
+if ($live.Count -gt 0) {
+    throw ("llama-server is already running (pid {0}) from this kit. Run serve-down.ps1 first." -f ($live.Id -join ", "))
+}
+
 $proc = Start-Process -FilePath $server.FullName -ArgumentList $argList `
     -WorkingDirectory $server.DirectoryName -WindowStyle Hidden -PassThru `
     -RedirectStandardOutput $outLog -RedirectStandardError $errLog
-$proc.Id | Set-Content -Path $PID_FILE
 
 $deadline = (Get-Date).AddSeconds(180)
 $ready = $false
@@ -192,16 +202,17 @@ while ((Get-Date) -lt $deadline) {
     if ($proc.HasExited) {
         Write-Host "llama-server exited early (code $($proc.ExitCode)). Last log lines:" -ForegroundColor Red
         Get-Content $errLog -Tail 25 -ErrorAction SilentlyContinue
-        Remove-Item $PID_FILE -ErrorAction SilentlyContinue
-        throw "Server failed to start. 'unknown model architecture' => llama.cpp build older than b$MIN_BUILD; run fetch.ps1. 'out of memory' => lower context in config.json."
+        throw "Server failed to start. 'unknown model architecture' => run fetch.ps1 to update llama.cpp. 'out of memory' => lower context in models.json for this model."
     }
     if (Test-ServerHealthy) { $ready = $true; break }
 }
 if (-not $ready) {
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-    Remove-Item $PID_FILE -ErrorAction SilentlyContinue
     throw "Server did not become healthy within 180s; process stopped. See $errLog"
 }
+# Only record the PID once the server is actually serving, so a failed spawn
+# cannot overwrite a healthy instance's PID.
+$proc.Id | Set-Content -Path $PID_FILE
 
 Start-Sleep -Seconds 1
 $freeAfter = Get-FreeVramGb

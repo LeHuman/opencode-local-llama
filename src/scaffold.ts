@@ -57,9 +57,11 @@ function writeKitConfig(kitPath: string, cfg: LocalLlamaConfig): void {
     }
   }
 
-  current.modelsDir = cfg.modelsPath ?? (current.modelsDir as string | undefined) ?? "models"
-  if (cfg.binPath) current.toolsDir = cfg.binPath
-  current.host ??= "127.0.0.1"
+  const trim = (p: string) => (p.length > 3 ? p.replace(/[\\/]+$/, "") : p)
+  if (cfg.modelsPath) current.modelsDir = trim(cfg.modelsPath)
+  else if (typeof current.modelsDir !== "string") current.modelsDir = "models"
+  if (cfg.binPath) current.toolsDir = trim(cfg.binPath)
+  current.host = cfg.host
   current.port = cfg.port
   current.sleepIdleSeconds ??= 900
   current.routerMode ??= true

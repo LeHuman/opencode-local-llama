@@ -1,5 +1,5 @@
-import { spawn, execFileSync } from "node:child_process"
-import { appendFileSync, existsSync, readFileSync } from "node:fs"
+import { spawn, execFileSync, type ChildProcess } from "node:child_process"
+import { appendFileSync, closeSync, existsSync, openSync, readdirSync, readFileSync } from "node:fs"
 import path from "node:path"
 import type { LocalLlamaConfig } from "./config"
 
@@ -39,25 +39,108 @@ const PS = `${process.env.SystemRoot ?? "C:\\Windows"}\\System32\\WindowsPowerSh
 const PS_ARGS = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]
 
 /**
- * Start serve-up.ps1 without waiting for it. The child lives as long as the
- * process hosting this plugin; OpenCode reaps it on exit, which is the desired
- * teardown behavior. `detached: true` is deliberately NOT used: on Windows it
- * creates a console-less child that silently fails.
+ * Start serve-up.ps1 without waiting for it. Its output is appended to
+ * logs/serve-up.log so pre-spawn failures (missing binaries, no GGUF, missing
+ * models.json entry) are diagnosable instead of vanishing. The child lives as
+ * long as the process hosting this plugin; OpenCode reaps it on exit, which is
+ * the desired teardown behavior. `detached: true` is deliberately NOT used: on
+ * Windows it creates a console-less child that silently fails.
  */
-export function spawnServer(cfg: LocalLlamaConfig): void {
+export function spawnServer(cfg: LocalLlamaConfig): ChildProcess | null {
   const script = kitScript(cfg, "serve-up.ps1")
   debug(`spawn ${PS} ${script}`)
   try {
+    const log = openSync(path.join(cfg.kitPath!, "logs", "serve-up.log"), "a")
     const child = spawn(PS, [...PS_ARGS, script], {
-      stdio: "ignore",
+      stdio: ["ignore", log, log],
       windowsHide: true,
     })
-    child.on("error", (error) => debug(`spawn error: ${error.message}`))
-    child.on("exit", (code) => debug(`spawn exit: ${code}`))
+    child.on("exit", (code) => {
+      closeSync(log)
+      debug(`spawn exit: ${code}`)
+    })
+    child.on("error", (error) => {
+      closeSync(log)
+      debug(`spawn error: ${error.message}`)
+    })
     child.unref()
+    return child
   } catch (error) {
     debug(`spawn threw: ${(error as Error).message}`)
+    return null
   }
+}
+
+/** Last lines of the serve-up log, used when the launcher dies early. */
+export function readServeUpLog(cfg: LocalLlamaConfig, lines = 15): string {
+  try {
+    const content = readFileSync(path.join(cfg.kitPath!, "logs", "serve-up.log"), "utf8")
+    return content.split(/\r?\n/).filter(Boolean).slice(-lines).join("\n")
+  } catch {
+    return ""
+  }
+}
+
+/** Resolve the models folder the kit will use (kit config.json, kit-relative). */
+export function resolveModelsDir(cfg: LocalLlamaConfig): string {
+  try {
+    const kitConfig = JSON.parse(readFileSync(path.join(cfg.kitPath!, "config.json"), "utf8")) as {
+      modelsDir?: string
+    }
+    if (!kitConfig.modelsDir) return path.join(cfg.kitPath!, "models")
+    return path.isAbsolute(kitConfig.modelsDir)
+      ? kitConfig.modelsDir
+      : path.join(cfg.kitPath!, kitConfig.modelsDir)
+  } catch {
+    return path.join(cfg.kitPath!, "models")
+  }
+}
+
+function findServerExe(dir: string): string | null {
+  if (!existsSync(dir)) return null
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      const nested = findServerExe(full)
+      if (nested) return nested
+    } else if (entry.name.toLowerCase() === "llama-server.exe") {
+      return full
+    }
+  }
+  return null
+}
+
+/**
+ * Cheap checks before spawning, so a misconfigured kit fails in milliseconds
+ * with an actionable message instead of timing out after startTimeoutMs.
+ */
+export function preflight(cfg: LocalLlamaConfig): string | null {
+  let toolsDir = cfg.binPath ?? path.join(cfg.kitPath!, "build", "tools")
+  try {
+    const kitConfig = JSON.parse(readFileSync(path.join(cfg.kitPath!, "config.json"), "utf8")) as {
+      toolsDir?: string
+    }
+    if (!cfg.binPath && kitConfig.toolsDir) {
+      toolsDir = path.isAbsolute(kitConfig.toolsDir)
+        ? kitConfig.toolsDir
+        : path.join(cfg.kitPath!, kitConfig.toolsDir)
+    }
+  } catch {
+    // fall back to the default location
+  }
+
+  if (!findServerExe(toolsDir)) {
+    return `llama-server.exe not found under ${toolsDir}. Run the kit's fetch.ps1 to install llama.cpp.`
+  }
+
+  const modelsDir = resolveModelsDir(cfg)
+  const ggufs = existsSync(modelsDir)
+    ? readdirSync(modelsDir).filter((f) => f.toLowerCase().endsWith(".gguf"))
+    : []
+  if (ggufs.length === 0) {
+    return `no .gguf files in ${modelsDir}. Add a model and an entry in models.json.`
+  }
+  return null
 }
 
 /** Stop the server and wait for serve-down.ps1; never throws. */
@@ -115,10 +198,20 @@ export async function isHealthy(cfg: LocalLlamaConfig, timeoutMs = 2_000): Promi
   }
 }
 
-/** Resolve once /health answers, reject on timeout. */
-export async function waitForHealth(cfg: LocalLlamaConfig, timeoutMs: number): Promise<void> {
+/** Resolve once /health answers; fail early if the launcher exits or is killed. */
+export async function waitForHealth(
+  cfg: LocalLlamaConfig,
+  timeoutMs: number,
+  isAlive?: () => boolean,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
+    if (isAlive && !isAlive()) {
+      const tail = readServeUpLog(cfg)
+      throw new Error(
+        `serve-up.ps1 exited before the server became healthy.${tail ? `\n${tail}` : ""}`,
+      )
+    }
     if (await isHealthy(cfg)) return
     await new Promise((resolve) => setTimeout(resolve, 1_000))
   }

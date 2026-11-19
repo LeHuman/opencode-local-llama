@@ -130,7 +130,7 @@ Plugin options, all optional:
 | `fallbackModels` | `[]` | Ids to register before discovery succeeds |
 | `debug` | `false` | Append lifecycle traces to `%TEMP%\opencode-local-llama.log` |
 
-The kit's `config.json` holds machine-level settings only: `modelsDir`, `toolsDir`, `host`, `port`, `sleepIdleSeconds`, `routerMode`, `modelsMax`, `minBuild`, and `defaults` for sampling.
+The kit's `config.json` holds machine-level settings only: `modelsDir`, `toolsDir`, `host`, `port`, `sleepIdleSeconds`, `routerMode`, `modelsMax`, `minBuild`, and `defaults` for sampling. The plugin writes `host` and `port` from its options on every start; models and defaults stay as you left them.
 
 ## Behavior
 

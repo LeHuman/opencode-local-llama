@@ -6,6 +6,7 @@ import {
   discoverModels,
   isHealthy,
   kitReady,
+  preflight,
   setDebug,
   spawnServer,
   spawnWatchdog,
@@ -44,6 +45,11 @@ export default Plugin.define({
       if (!kitReady(cfg)) {
         throw new Error(`kit is incomplete at ${cfg.kitPath} (expected scripts/serve-up.ps1 and scripts/serve-down.ps1)`)
       }
+      // Cheap, synchronous checks: failing here means no provider is registered
+      // and OpenCode reports the model as unavailable immediately, instead of
+      // retrying against a server that cannot start.
+      const problem = preflight(cfg)
+      if (problem) throw new Error(problem)
     } catch (error) {
       console.error(TAG, (error as Error).message)
       return
@@ -100,11 +106,13 @@ export default Plugin.define({
         } else {
           owned = true
           debug("starting server")
-          spawnServer(cfg)
+          const child = spawnServer(cfg)
+          // Arm the watchdog immediately: a kill during the first load would
+          // otherwise leave the server holding VRAM.
+          if (cfg.teardownOnExit) spawnWatchdog(cfg, process.pid)
+          await waitForHealth(cfg, cfg.startTimeoutMs, child ? () => child.exitCode === null : undefined)
         }
-        await waitForHealth(cfg, cfg.startTimeoutMs)
         if (disposed) return
-        if (owned && cfg.teardownOnExit) spawnWatchdog(cfg, process.pid)
 
         const discovered = await discoverModels(cfg)
         const added: string[] = []
@@ -132,6 +140,8 @@ export default Plugin.define({
           supervisor = startSupervisor(cfg, {
             onSpawn: () => {
               owned = true
+              // A restart is a new server that also needs teardown coverage.
+              if (cfg.teardownOnExit) spawnWatchdog(cfg, process.pid)
             },
           })
         }

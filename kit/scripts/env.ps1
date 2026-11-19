@@ -41,8 +41,11 @@ $cfg = Get-KitConfig
 # ---- Paths and endpoint --------------------------------------------------------
 function Resolve-KitPath($value, $fallback) {
     if (-not $value) { return $fallback }
-    if ([IO.Path]::IsPathRooted($value)) { return $value }
-    return (Join-Path $KIT_ROOT $value)   # relative paths in config are kit-relative
+    $p = $value
+    # Explorer-style trailing separators break quoted llama-server args ("F:\models\").
+    if ($p.Length -gt 3) { $p = $p.TrimEnd('\', '/') }
+    if ([IO.Path]::IsPathRooted($p)) { return $p }
+    return (Join-Path $KIT_ROOT $p)   # relative paths in config are kit-relative
 }
 
 $MODELS_DIR = Resolve-KitPath $env:LOCAL_LLM_MODELS_DIR $null
@@ -167,6 +170,13 @@ function Initialize-ModelsConfig {
     $template = @'
 {
   "models": {
+    "My-Model-Q5_K_M": {
+      "alias": "My-Model",
+      "context": 65536,
+      "kvQuant": "q4_0",
+      "gpuLayers": 99,
+      "parallel": 1
+    }
   }
 }
 '@

@@ -13,7 +13,7 @@ export interface Supervisor {
 }
 
 const TICK_MS = 15_000
-const OOM_PATTERN = /out of memory|cudaMalloc|CUDA error|ggml_backend_cuda/i
+const OOM_PATTERN = /out of memory|cudaMalloc failed|failed to allocate|cudaErrorMemoryAllocation|CUDA error/i
 
 /**
  * Watches the server while OpenCode runs. On a crash it restarts with
@@ -43,7 +43,7 @@ export function startSupervisor(cfg: LocalLlamaConfig, options: SupervisorOption
       failures = 0
       log(
         "server crashed with a GPU/OOM error — not retrying (the config cannot fit). " +
-          `Lower NUM_CTX in the kit's scripts/env.ps1. Cooldown ${Math.round(cfg.cooldownMs / 60_000)} min.`,
+          `Lower the context for this model in models.json. Cooldown ${Math.round(cfg.cooldownMs / 60_000)} min.`,
       )
       return
     }
