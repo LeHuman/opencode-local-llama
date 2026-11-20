@@ -101,8 +101,11 @@ The kit scripts also run standalone against the scaffolded kit:
 ```powershell
 powershell -File "$env:LOCALAPPDATA\opencode-local-llama\kit\scripts\serve-up.ps1"
 powershell -File "$env:LOCALAPPDATA\opencode-local-llama\kit\scripts\status.ps1"
+powershell -File "$env:LOCALAPPDATA\opencode-local-llama\kit\scripts\sleep.ps1"
 powershell -File "$env:LOCALAPPDATA\opencode-local-llama\kit\scripts\serve-down.ps1"
 ```
+
+`sleep.ps1` unloads the loaded model immediately instead of waiting for the idle timer. The router stays up, VRAM is freed, and the next request reloads the model automatically.
 
 ## Configuration
 
